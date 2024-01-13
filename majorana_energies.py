@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import sys
 from typing import Literal
 import seaborn as sns
+import cmath
 
 '''hello'''
 
@@ -35,19 +36,19 @@ def parse_args(args):
         help="Number of sites (for SSH the number of C atoms will be 2x this).",
     )
     parser.add_argument(
-        '-m', type=str, default='1.0',
-        help="Specify onsite energy mu (arb. units).",
+        '-m', type=float, nargs='+', default=[1.],
+        help="Specify onsite energy mu (arb. units). Specify two numbers if complex, e.g. '0.1 0.5' for .1+.5j",
     )
     parser.add_argument(
-        '-t', type=str, default='1.+0.j',
+        '-t', type=float, nargs='+', default=[1.],
         help="Specify nearest-neighbor hopping (string will be evaluated and cast to complex number).",
     )
     parser.add_argument(
-        '-d', type=str, default='1.+0.j',
+        '-d', type=float, nargs='+', default=[1.],
         help="Kitaev only: Specify Cooper pairing strength."
     )
     parser.add_argument(
-        '-t2', type=str, default='1.+0.j',
+        '-t2', type=float, nargs='+', default=[1.],
         help="SSH only: Specify double-bond hopping strength (unused if tuning this parameter)",
     )
     parser.add_argument(
@@ -59,6 +60,10 @@ def parse_args(args):
         '--enforce-even-sites', action='store_true', default=False,
         help="In SSH model enforce an even number of C-atom sites (odd number of hopping terms).",
     )
+    parser.add_argument(
+        '--plot-band-idxs', type=int, nargs='+', default=[0, 1], 
+        help="Enter idx of the energy modes (0=lowest-energy, etc) to see spatial distribution of"
+    )
     return parser.parse_args(args)
 
 
@@ -68,90 +73,100 @@ class H_BdG_constructor():
     Plot the energies for the system as a given parameter is tuned.
     
     When initiating:
-        1st positional arg: 'Kitaev' or 'SSH'
-        Positional args: N_sites:int=5 #
+        positional arg model: 'Kitaev' or 'SSH'
+        positional arg model_params: dict of model-defining parameters
+
     '''
     def __init__(self,
         model:Literal['kitaev', 'ssh'],
-        param_label:str,
-        param_space:np.array,
+        model_params:dict,
         **kwargs,
     ):
         self.model = model
-        self.param_label = param_label
-        self.param_space = param_space
-        self.N_sites = kwargs.get('N')
+        self.model_params = model_params
+
+        self.param_label = self.model_params['tuning_parameter']
+        self.param_space = self.model_params['parameter_space']
+        self.N_sites = self.model_params.get('N_sites')
+        self.plot_band_idxs = kwargs.get('plot_band_idxs', [0,1])
 
         if self.model.lower() == 'kitaev':
             # Kitaev model is 1d chain of superconducing qubits characterized by parameters t, m, d
             # that specify nn-hopping strength, on-site energy, cooper pairing strength, respectively
-            self.t = kwargs.get('t_hopping', 1.+0.j) 
-            self.m = kwargs.get('mu_onsite', 1.+0.j)
-            self.d = kwargs.get('d_cooper', 1.+0.j)
-            self.h_size = 2 * N
+            self.t = model_params['nn_hopping']
+            self.m = model_params['onsite_energy']
+            self.d = model_params['cooper_pairing']
 
             self.descr = f"Kitaev t: {self.t}, d: {self.d}"
             if 'mu' not in self.param_label:
                 self.descr += f", mu: {self.m}"
+            
+            if model_params['tuning_parameter'] == 'x':
+                self.ROUTINE = 1
+                print(f"Constructing BdG Hamiltoninan for Kitaev chain tuning N-to-1 hopping...")
+            else:
+                self.ROUTINE = 0
+                print(f"Constructing BdG Hamiltonian for Kitaev chain tuning on-site energy...")
 
         elif self.model.lower() == 'ssh':
             # SSH model is polyacetylene chain characterized by t1 and t2,
             # that specify the hopping along a single and double bond, respectively
-            self.t1 = kwargs.get('t1', 1.+0.j) 
-            self.t2 = kwargs.get('t2', 1.+0.j)
+            self.t1 = model_params['t1_hopping']
+            self.t2 = model_params['t2_hopping']
+
             # For ssh actual number of atomic C sites is kinda ambiguous
             # so let user choose to enforce an even number or not
             self.enforce_even_sites = kwargs.get('enforce_even_sites', False)
             if self.enforce_even_sites:
-                self.h_size = 2 * N
-            else:
-                self.h_size = 2 * N + 1
-
+                pass
+            
             self.descr = f"SSH t1: {self.t1}"
             if 't2' not in self.param_label:
                 self.descr += f", t2: {self.t2}"
             if self.enforce_even_sites:
                 self.descr += f", even sites"
+            
+            if self.param_label == 'x':
+                self.ROUTINE = 3
+                print(f"Constructing BdG Hamiltonian for SSH chain tuning N-to-1 hopping...")
+            else:
+                self.ROUTINE = 2
+                print(f"Constructing BdG Hamiltonian for SSH chain tuning t2 hopping strength... ")
 
 
     def construct_and_solve_hamiltonians(self):
         # Construct and solve H_BdG across parameter space
         self.energy_bands = []
-        self.E0_state_densities = []
-        self.E1_state_densities = []
+        self.plot_state_densities = []
         for param in self.param_space:
-            if self.model == 'kitaev':
-                if self.param_label == 'x':
-                    # Closed-loop Kitaev chain, tune loop-closing strength
-                    H_BdG = construct_hamiltonian_kitaev(
-                        self.N_sites, self.m, self.t, self.d, 
-                        last_first_hop=1.*param
-                    )
-                else:
-                    # Open-loop Kitaev chain, tune mu/t
-                    H_BdG = construct_hamiltonian_kitaev(
-                        self.N_sites, param*self.t, self.t, self.d, 
-                    )
-            elif self.model == 'ssh':
-                if self.param_label == 'x':
-                    # Closed-loop SSH chain, tune loop-closing strength
-                    H_BdG = construct_hamiltonian_ssh(
-                        self.N_sites, self.t1, self.t2, 
-                        close_loop_hopping=1.*param,
-                        even_sites=self.enforce_even_sites
-                    )
-                else:
-                    # Open-loop SSH chain, tune t2/t1
-                    H_BdG = construct_hamiltonian_ssh(
-                        N, self.t1, param*self.t1,
-                        close_loop_hopping=None,
-                        even_sites=self.enforce_even_sites,
-                    )
-            energies, E0_density, E1_density = self.get_evals_and_state_densities(H_BdG)
+            # Evaluate routine-specific H_BdG at each parameter increment 
+            if self.ROUTINE == 0:
+                # Open-loop Kitaev chain, tune mu/t
+                H_BdG = construct_hamiltonian_kitaev(
+                    self.N_sites, param*self.t, self.t, self.d, 
+                )
+            elif self.ROUTINE == 1:
+                H_BdG = construct_hamiltonian_kitaev(
+                    self.N_sites, self.m, self.t, self.d, 
+                    last_first_phase=1.*param
+                )
+            elif self.ROUTINE == 2:
+                H_BdG = construct_hamiltonian_ssh(
+                    N, self.t1, param*self.t1,
+                    close_loop_hopping=None,
+                    even_sites=self.enforce_even_sites,
+                )
+            elif self.ROUTINE == 3:
+                H_BdG = construct_hamiltonian_ssh(
+                    self.N_sites, self.t1, self.t2, 
+                    close_loop_hopping=1.*param,
+                    even_sites=self.enforce_even_sites
+                )
+            
+            energies, plot_state_densities = self.get_evals_and_state_densities(H_BdG, see_idx=self.plot_band_idxs)
             # Save energies and electron densities to object
             self.energy_bands.append(sorted(energies))
-            self.E0_state_densities.append(E0_density)
-            self.E1_state_densities.append(E1_density)
+            self.plot_state_densities.append(plot_state_densities)
             
             if param == self.param_space[0]:
                 _, axs = plt.subplots(1,2)
@@ -162,31 +177,27 @@ class H_BdG_constructor():
                 plt.suptitle('H_BdG @ param[0]')
                 plt.show()
 
-    def get_evals_and_state_densities(self, H_BdG):
+    def get_evals_and_state_densities(self, H_BdG, see_idx=[0,1]):
         '''
         Given a BdG Hamiltonian, calculate the energies.
         Also return the wavefunction density for the most- and second-most weakly bound state.
         '''
-
-        evals, evecs = np.linalg.eigh(H_BdG)
+        evals, evecs = np.linalg.eig(H_BdG)
+        evals = np.real(evals)
 
         # Number of physical sites is half the number of quasiparticle energies
         n = int(len(evals) / 2)
 
         # Get wavefunctions for the lowest- and next-lowest-energy states
-        E0_idx = np.where(np.isin(np.abs(evals), sorted(np.abs(evals))[:2]))[0]
-        E1_idx = np.where(np.isin(np.abs(evals), sorted(np.abs(evals))[2:4]))[0]
+        plot_state_densities = []
+        for idx in see_idx:
+            E_idx = np.where(np.isin(np.abs(evals), sorted(np.abs(evals))[idx*2:idx*2+2]))[0]
+            states = (evecs[:, E_idx[0]], evecs[:, E_idx[1]])
+            state_density = np.abs(states[0][:n])**2+ np.abs(states[0][n:]) ** 2
+            state_density += np.abs(states[1][:n])**2+ np.abs(states[1][n:]) ** 2
+            plot_state_densities.append(state_density)
 
-        E0_states = (evecs[:, E0_idx[0]], evecs[:, E0_idx[1]])
-        E1_states = (evecs[:, E1_idx[0]], evecs[:, E1_idx[1]])
-
-        E0_state_density = np.abs(E0_states[0][:n])**2+ np.abs(E0_states[0][n:]) ** 2
-        E0_state_density += np.abs(E0_states[1][:n])**2+ np.abs(E0_states[1][n:]) ** 2
-        
-        E1_state_density = np.abs(E1_states[0][:n])**2 + np.abs(E1_states[0][n:]) ** 2
-        E1_state_density += np.abs(E1_states[1][:n])**2 + np.abs(E1_states[1][n:]) ** 2
-
-        return sorted(evals), E0_state_density, E1_state_density
+        return sorted(evals), plot_state_densities#E0_state_density, E1_state_density
 
     def plot_figures(self):
         # Plot the energy spectrum across parameter space
@@ -203,8 +214,8 @@ class H_BdG_constructor():
             plt.subplot(3,2,subplot_idx)
             plt.title(f'Wavefunction density at {self.param_label}={round(self.param_space[param_idx],1)}')
             plt.xlabel('Atomic site number')
-            plt.plot(self.E0_state_densities[param_idx], 'b', label='0')
-            plt.plot(self.E1_state_densities[param_idx], 'r', label='1')
+            for i, state_densities in enumerate(self.plot_state_densities[param_idx]):
+                plt.plot(state_densities, label=f'{self.plot_band_idxs[i]}')
         
         plt.suptitle(self.descr)
         plt.tight_layout()
@@ -212,7 +223,51 @@ class H_BdG_constructor():
         plt.show()
 
 
-def construct_hamiltonian_kitaev(N, mu_onsite, t_nn, d_cooper, last_first_hop=None):
+def construct_hamiltonian_kitaev(
+        N, mu_onsite, t_nn, d_cooper,
+        last_first_phase=0.5, apply_cooper_phase=False
+    ):
+    '''
+    N is number of atomic sites
+    mu_onsite is onsite energy, t_nn is nearest-neighbor hopping, d_cooper is Cooper pairing strength
+
+    boundary_hopping sets the strength of hopping t* between first and last site (closing the loop).
+    The value of boundary_hopping is the x in t* = t_nn(1 - 2x) (knob to vary t* between -t_nn and t_nn)
+    '''
+    block_size = N
+
+    # Get on-site energy contribution
+    Hm = np.zeros((2*N,)*2, dtype=np.complex128)
+    for i in range(block_size):
+        Hm[i,i] += -mu_onsite
+        Hm[i+N, i+N] += mu_onsite
+
+    # Get nn-hopping contribution
+    Ht = np.zeros((2*N,)*2, dtype=np.complex128)
+    for i in range(block_size - 1):
+        Ht[i, i+1] += -t_nn
+        Ht[N+i, N+i+1] += t_nn
+    # Add last-to-first hopping with phase
+    Ht[N-1, 0] += -t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
+    Ht[2*N-1, N] += t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
+    Ht = Ht + np.transpose(np.conjugate(Ht))
+
+
+    # Get cooper-pairing contribution
+    Hd = np.zeros((2*N,)*2, dtype=np.complex128)
+    for i in range(block_size -1):
+        Hd[i, N+i+1] += -d_cooper
+        Hd[N+i, i+1] += d_cooper
+    if apply_cooper_phase:
+        # Allow Cooper pairing between last and first site of chain
+        Hd[N-1, N] += -d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
+        Hd[2*N-1, 0] += d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
+    Hd = Hd + np.transpose(np.conjugate(Hd))
+
+    return Hm + Ht + Hd
+
+
+def construct_hamiltonian_kitaev_arx(N, mu_onsite, t_nn, d_cooper, last_first_hop=None):
     '''
     N is number of atomic sites
     mu_onsite is onsite energy, t_nn is nearest-neighbor hopping, d_cooper is Cooper pairing strength
@@ -232,8 +287,8 @@ def construct_hamiltonian_kitaev(N, mu_onsite, t_nn, d_cooper, last_first_hop=No
 
     if last_first_hop is not None:
         # Add close-loop hopping from first and last site
-        H_block[-1, 0] += t_nn * (1. - 2. * last_first_hop) 
-        H_block[0, -1] += (t_nn * (1. - 2. * last_first_hop)).conjugate()
+        H_block[-1, 0] += t_nn * np.real(cmath.exp(1j * last_first_hop * np.pi ))
+        H_block[0, -1] += t_nn *np.real(cmath.exp(1j * last_first_hop * np.pi )).conjugate()
 
 
     # Create the (upper-right) D-block of H_BdG
@@ -287,45 +342,45 @@ def construct_hamiltonian_ssh(N, t1, t2, close_loop_hopping=None, even_sites=Fal
     return H_BdG
 
 
+def parse_complex_arg(arg):
+    '''Get complex value from a list of strings encoding the real and imaginary parts'''
+    if len(arg) == 1:
+        return float(arg[0])
+    elif len(arg) == 2:
+        return arg[0] + 1j * arg[1]
+    else:
+        sys.exit(f"Couldn't parse an input complex number: {arg}")
+
+
 if __name__ == '__main__':
 
     args = parse_args(sys.argv[1:])
 
     N = args.N # Number of unit cells
     param_label = args.tune # Parameter to tune
-    close_loop_param = args.x 
+    plot_band_idx = args.plot_band_idxs # Idx of energy modes to see spatial distribution
 
     if args.model.lower() == 'kitaev':
         # Get Kitaev model-defining parameters
-        t_hopping = complex(eval(args.t))
-        d_cooper = complex(eval(args.d))
-        mu_onsite = complex(eval(args.m)) # Unused if tuning mu/t
-        num_sites = N
 
         # Set up parameter space to tune system through
         if param_label is None or param_label == 'mu/t':
             param_label = 'mu/t'
             param_space = np.linspace(0.0, 3.0, 41)
         elif param_label == 'x':
-            param_space = np.linspace(0., 1., 41) 
+            param_space = np.linspace(0., 1., 41)
 
-
-        # Get description for plots
-        model_descr = f"Kitaev t: {t_hopping}, d: {d_cooper}"
-        if 'mu' not in param_label:
-            model_descr += f", mu: {mu_onsite}"
-
-        # Initiate the H_BdG-constructing class
-        H_constructor = H_BdG_constructor(
-            'kitaev', param_label, param_space, N=N,
-            t_hopping=t_hopping, d_cooper=d_cooper, mu_onsite=mu_onsite,
-        )
+        model_params = {
+            'onsite_energy': parse_complex_arg(args.m), # Unused if tuning mu/t
+            'cooper_pairing': parse_complex_arg(args.d),
+            'nn_hopping': parse_complex_arg(args.t),
+            'N_sites': N,
+            'parameter_space': param_space,
+            'tuning_parameter': param_label,
+        }
 
     elif args.model.lower() == 'ssh':
         # Get SSH model-defining parameters
-        t1_hopping = 1.0 + 0.0j # Reference strength for SSH single-bond hopping
-        t2_hopping = complex(eval(args.t2)) # Not used if t2 is tuning parameter
-        num_sites = 2 * N # 
 
         # Set up param space to tune system through
         # Currently all param share same range for values of interest
@@ -333,20 +388,20 @@ if __name__ == '__main__':
             param_label = 't2/t1'
         param_space = np.linspace(0., 1., 41)
         
-        # Get description for plots
-        model_descr = f"SSH t1: {t1_hopping}"
-        if 't2' not in param_label:
-            model_descr += f", t2: {t2_hopping}"
-        if not args.enforce_even_sites:
-            num_sites = 2 * N + 1
-            model_descr += ', even sites'
+        model_params = {
+            't1_hopping': 1.0 + 0.0j , # Reference strength for SSH single-bond hopping
+            't2_hopping': parse_complex_arg(args.t2), # Not used if t2 is tuning parameter
+            'N_sites': 2 * N,
+            'parameter_space': param_space,
+            'tuning_parameter': param_label,
+        }
 
-        # Initiate Hamiltonian constructor class
-        H_constructor = H_BdG_constructor(
-            'ssh', param_label, param_space, N=N,
-            t1_hopping=t1_hopping, t2_hopping=t2_hopping,
-            enforce_even_sites=args.enforce_even_sites,
-        )
+    # Initiate Hamiltonian constructor class
+    H_constructor = H_BdG_constructor(
+        args.model, model_params,
+        enforce_even_sites=args.enforce_even_sites,
+        plot_band_idxs=args.plot_band_idxs,
+    )
 
     H_constructor.construct_and_solve_hamiltonians()
     H_constructor.plot_figures()
