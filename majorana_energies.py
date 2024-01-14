@@ -32,7 +32,7 @@ def parse_args(args):
             "x is parameter for tuning first-last site hopping (see arg 'x' help)."
     )
     parser.add_argument(
-        '-N', type=int, default=10,
+        '-N', type=int, default=25,
         help="Number of sites (for SSH the number of C atoms will be 2x this).",
     )
     parser.add_argument(
@@ -360,33 +360,29 @@ if __name__ == '__main__':
     param_label = args.tune # Parameter to tune
     plot_band_idx = args.plot_band_idxs # Idx of energy modes to see spatial distribution
 
-    if args.model.lower() == 'kitaev':
-        # Get Kitaev model-defining parameters
+    if param_label == 'x':
+        param_space = np.linspace(0., 1., 41)
 
+    # Get model-defining parameters
+    if args.model.lower() == 'kitaev':
         # Set up parameter space to tune system through
         if param_label is None or param_label == 'mu/t':
             param_label = 'mu/t'
             param_space = np.linspace(0.0, 3.0, 41)
-        elif param_label == 'x':
-            param_space = np.linspace(0., 1., 41)
 
         model_params = {
             'onsite_energy': parse_complex_arg(args.m), # Unused if tuning mu/t
-            'cooper_pairing': parse_complex_arg(args.d),
-            'nn_hopping': parse_complex_arg(args.t),
+            'cooper_pairing': parse_complex_arg(args.d), # Cooper pairing strength
+            'nn_hopping': parse_complex_arg(args.t), # nearest-neighbor hopping
             'N_sites': N,
             'parameter_space': param_space,
             'tuning_parameter': param_label,
         }
 
     elif args.model.lower() == 'ssh':
-        # Get SSH model-defining parameters
-
         # Set up param space to tune system through
-        # Currently all param share same range for values of interest
         if param_label is None:
             param_label = 't2/t1'
-        param_space = np.linspace(0., 1., 41)
         
         model_params = {
             't1_hopping': 1.0 + 0.0j , # Reference strength for SSH single-bond hopping
@@ -398,11 +394,11 @@ if __name__ == '__main__':
 
     # Initiate Hamiltonian constructor class
     H_constructor = H_BdG_constructor(
-        args.model, model_params,
+        args.model,
+        model_params,
         enforce_even_sites=args.enforce_even_sites,
         plot_band_idxs=args.plot_band_idxs,
     )
-
     H_constructor.construct_and_solve_hamiltonians()
     H_constructor.plot_figures()
 
