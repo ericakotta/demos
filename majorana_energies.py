@@ -225,7 +225,8 @@ class H_BdG_constructor():
 
 def construct_hamiltonian_kitaev(
         N, mu_onsite, t_nn, d_cooper,
-        last_first_phase=0.5, apply_cooper_phase=False
+        last_first_phase=0.5, apply_cooper_phase=False,
+        antisymmetrize=False,
     ):
     '''
     N is number of atomic sites
@@ -264,7 +265,12 @@ def construct_hamiltonian_kitaev(
         Hd[2*N-1, 0] += d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
     Hd = Hd + np.transpose(np.conjugate(Hd))
 
-    return Hm + Ht + Hd
+    H = Hm + Ht + Hd
+
+    if not antisymmetrize:
+        return antisymmetrize_H(H)
+    else:
+        return H
 
 
 def construct_hamiltonian_kitaev_arx(N, mu_onsite, t_nn, d_cooper, last_first_hop=None):
@@ -305,7 +311,23 @@ def construct_hamiltonian_kitaev_arx(N, mu_onsite, t_nn, d_cooper, last_first_ho
     
     return H_BdG
 
-def construct_hamiltonian_ssh(N, t1, t2, close_loop_hopping=None, even_sites=False):
+def antisymmetrize_H(H_BdG):
+    sz = int(H_BdG.shape[0] / 2)
+    H = H_BdG[:sz, :sz]
+    D = H_BdG[:sz, sz:]
+    H_out = np.zeros(H_BdG.shape, dtype=np.cdouble)
+    H_out[:sz, :sz] = H - H.conjugate() + D - D.conjugate()
+    H_out[:sz, sz:] = 1j * (-H - H.conjugate() + D + D.conjugate())
+    H_out[sz:, :sz] = 1j * (H + H.conjugate() + D + D.conjugate())
+    H_out[sz:, sz:] = H - H.conjugate() - D + D.conjugate()
+    return H_out
+
+def construct_hamiltonian_ssh(
+        N, t1, t2, 
+        close_loop_hopping=None,
+        even_sites=False,
+        antisymmetrize=False
+    ):
     '''
     Construct Bogoliubov-de Gennes Hamiltonian for SSH model (polyacetylene chain)
     t1 and t2 are the two hopping strengths electron encounters as it hops along dimer chain
@@ -359,6 +381,7 @@ if __name__ == '__main__':
     N = args.N # Number of unit cells
     param_label = args.tune # Parameter to tune
     plot_band_idx = args.plot_band_idxs # Idx of energy modes to see spatial distribution
+    # param_slices = args.param_values # Parameter values at which to plot spatial distribution
 
     if param_label == 'x':
         param_space = np.linspace(0., 1., 41)
@@ -383,6 +406,7 @@ if __name__ == '__main__':
         # Set up param space to tune system through
         if param_label is None:
             param_label = 't2/t1'
+            param_space = np.linspace(0, 1.0, 41)
         
         model_params = {
             't1_hopping': 1.0 + 0.0j , # Reference strength for SSH single-bond hopping
