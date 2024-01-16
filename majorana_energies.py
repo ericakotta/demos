@@ -227,6 +227,7 @@ def construct_hamiltonian_kitaev(
         N, mu_onsite, t_nn, d_cooper,
         last_first_phase=0.5, apply_cooper_phase=False,
         antisymmetrize=False,
+        basis='electrons_holes',
     ):
     '''
     N is number of atomic sites
@@ -235,42 +236,54 @@ def construct_hamiltonian_kitaev(
     boundary_hopping sets the strength of hopping t* between first and last site (closing the loop).
     The value of boundary_hopping is the x in t* = t_nn(1 - 2x) (knob to vary t* between -t_nn and t_nn)
     '''
-    block_size = N
+    if basis=='majoranas'
+        ham_size = 2 * N
+        H = np.zeros((ham_size,) * 2, dtype=np.complex128)
+        for i in range(0, ham_size-4, 2):
+            H[i+3] += 2. * 1j * (t_nn - d_cooper)
+            H[i+4] += 2. * 1j * (t_nn + d_cooper)
+        
 
-    # Get on-site energy contribution
-    Hm = np.zeros((2*N,)*2, dtype=np.complex128)
-    for i in range(block_size):
-        Hm[i,i] += -mu_onsite
-        Hm[i+N, i+N] += mu_onsite
+    elif basis=='electrons_holes':
 
-    # Get nn-hopping contribution
-    Ht = np.zeros((2*N,)*2, dtype=np.complex128)
-    for i in range(block_size - 1):
-        Ht[i, i+1] += -t_nn
-        Ht[N+i, N+i+1] += t_nn
-    # Add last-to-first hopping with phase
-    Ht[N-1, 0] += -t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
-    Ht[2*N-1, N] += t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
-    Ht = Ht + np.transpose(np.conjugate(Ht))
+        block_size = N
+
+        # Get on-site energy contribution
+        Hm = np.zeros((2*N,)*2, dtype=np.complex128)
+        for i in range(block_size):
+            Hm[i,i] += -mu_onsite
+            Hm[i+N, i+N] += mu_onsite
+
+        # Get nn-hopping contribution
+        Ht = np.zeros((2*N,)*2, dtype=np.complex128)
+        for i in range(block_size - 1):
+            Ht[i, i+1] += -t_nn
+            Ht[N+i, N+i+1] += t_nn
+        # Add last-to-first hopping with phase
+        Ht[N-1, 0] += -t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
+        Ht[2*N-1, N] += t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
+        Ht = Ht + np.transpose(np.conjugate(Ht))
 
 
-    # Get cooper-pairing contribution
-    Hd = np.zeros((2*N,)*2, dtype=np.complex128)
-    for i in range(block_size -1):
-        Hd[i, N+i+1] += -d_cooper
-        Hd[N+i, i+1] += d_cooper
-    if apply_cooper_phase:
-        # Allow Cooper pairing between last and first site of chain
-        Hd[N-1, N] += -d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
-        Hd[2*N-1, 0] += d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
-    Hd = Hd + np.transpose(np.conjugate(Hd))
+        # Get cooper-pairing contribution
+        Hd = np.zeros((2*N,)*2, dtype=np.complex128)
+        for i in range(block_size -1):
+            Hd[i, N+i+1] += -d_cooper
+            Hd[N+i, i+1] += d_cooper
+        if apply_cooper_phase:
+            # Allow Cooper pairing between last and first site of chain
+            Hd[N-1, N] += -d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
+            Hd[2*N-1, 0] += d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
+        Hd = Hd + np.transpose(np.conjugate(Hd))
 
-    H = Hm + Ht + Hd
+        H = Hm + Ht + Hd
 
-    if not antisymmetrize:
-        return antisymmetrize_H(H)
-    else:
-        return H
+        if not antisymmetrize:
+            return antisymmetrize_H(H)
+        else:
+            return H
+
+    
 
 
 def construct_hamiltonian_kitaev_arx(N, mu_onsite, t_nn, d_cooper, last_first_hop=None):
