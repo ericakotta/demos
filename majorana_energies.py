@@ -32,7 +32,7 @@ def parse_args(args):
             "x is parameter for tuning first-last site hopping (see arg 'x' help)."
     )
     parser.add_argument(
-        '-N', type=int, default=25,
+        '-N', type=int, default=5,
         help="Number of sites (for SSH the number of C atoms will be 2x this).",
     )
     parser.add_argument(
@@ -64,6 +64,7 @@ def parse_args(args):
         '--plot-band-idxs', type=int, nargs='+', default=[0, 1], 
         help="Enter idx of the energy modes (0=lowest-energy, etc) to see spatial distribution of"
     )
+
     return parser.parse_args(args)
 
 
@@ -85,17 +86,19 @@ class H_BdG_constructor():
         self.model = model
         self.model_params = model_params
 
-        self.param_label = self.model_params['tuning_parameter']
-        self.param_space = self.model_params['parameter_space']
-        self.N_sites = self.model_params.get('N_sites')
+        self.param_label = model_params.get('tuning_parameter', 'mu/t')
+        self.param_space = model_params.get('parameter_space', np.linspace(0, 1, 51))
+        self.N_sites = model_params.get('N_sites', 5)
         self.plot_band_idxs = kwargs.get('plot_band_idxs', [0,1])
+        self.basis = kwargs.get('basis', 'single-particle')
+
 
         if self.model.lower() == 'kitaev':
             # Kitaev model is 1d chain of superconducing qubits characterized by parameters t, m, d
             # that specify nn-hopping strength, on-site energy, cooper pairing strength, respectively
-            self.t = model_params['nn_hopping']
-            self.m = model_params['onsite_energy']
-            self.d = model_params['cooper_pairing']
+            self.t = model_params.get('nn_hopping', 1.0)
+            self.m = model_params.get('onsite_energy', 1.0)
+            self.d = model_params.get('cooper_pairing', 1.0)
 
             self.descr = f"Kitaev t: {self.t}, d: {self.d}"
             if 'mu' not in self.param_label:
@@ -139,16 +142,16 @@ class H_BdG_constructor():
         self.energy_bands = []
         self.plot_state_densities = []
         for param in self.param_space:
-            # Evaluate routine-specific H_BdG at each parameter increment 
+            # Evaluate H_BdG at each parameter increment 
             if self.ROUTINE == 0:
                 # Open-loop Kitaev chain, tune mu/t
                 H_BdG = construct_hamiltonian_kitaev(
-                    self.N_sites, param*self.t, self.t, self.d, 
+                    self.N_sites, param*self.t, self.t, self.d,
                 )
             elif self.ROUTINE == 1:
                 H_BdG = construct_hamiltonian_kitaev(
                     self.N_sites, self.m, self.t, self.d, 
-                    last_first_phase=1.*param
+                    last_first_phase=1.*param,
                 )
             elif self.ROUTINE == 2:
                 H_BdG = construct_hamiltonian_ssh(
@@ -169,12 +172,12 @@ class H_BdG_constructor():
             self.plot_state_densities.append(plot_state_densities)
             
             if param == self.param_space[0]:
-                _, axs = plt.subplots(1,2)
-                sns.heatmap(ax=axs[0], data=np.real(H_BdG))
+                _, axs = plt.subplots(1,2, figsize=(10,4))
+                sns.heatmap(ax=axs[0], data=np.real(H_BdG), annot=True, square=True)
                 axs[0].set_title('real')
-                sns.heatmap(ax=axs[1], data=np.imag(H_BdG))
+                sns.heatmap(ax=axs[1], data=np.imag(H_BdG), annot=True, square=True)
                 axs[1].set_title('imag')
-                plt.suptitle('H_BdG @ param[0]')
+                plt.suptitle(f'H_BdG @ {self.param_label}={param}')
                 plt.show()
 
     def get_evals_and_state_densities(self, H_BdG, see_idx=[0,1]):
@@ -183,21 +186,22 @@ class H_BdG_constructor():
         Also return the wavefunction density for the most- and second-most weakly bound state.
         '''
         evals, evecs = np.linalg.eig(H_BdG)
-        evals = np.real(evals)
+        idx = np.argsort(evals)
+        evals = evals[idx]
+        evecs = evecs[:,idx]
 
         # Number of physical sites is half the number of quasiparticle energies
         n = int(len(evals) / 2)
 
-        # Get wavefunctions for the lowest- and next-lowest-energy states
+        # Get wavefunctions for the specified energy states
         plot_state_densities = []
         for idx in see_idx:
-            E_idx = np.where(np.isin(np.abs(evals), sorted(np.abs(evals))[idx*2:idx*2+2]))[0]
-            states = (evecs[:, E_idx[0]], evecs[:, E_idx[1]])
-            state_density = np.abs(states[0][:n])**2+ np.abs(states[0][n:]) ** 2
-            state_density += np.abs(states[1][:n])**2+ np.abs(states[1][n:]) ** 2
-            plot_state_densities.append(state_density)
+            state1, state2 = evecs[:, n + idx], evecs[:, n -idx - 1]
+            state_density1 = np.abs(state1[:n])**2+ np.abs(state1[n:]) ** 2
+            state_density2 = np.abs(state2[:n])**2+ np.abs(state2[n:]) ** 2
+            plot_state_densities.extend([state_density1, state_density2])
 
-        return sorted(evals), plot_state_densities#E0_state_density, E1_state_density
+        return evals, plot_state_densities
 
     def plot_figures(self):
         # Plot the energy spectrum across parameter space
@@ -211,15 +215,20 @@ class H_BdG_constructor():
         param_idxs = [0, int(len(self.param_space)/2), len(self.param_space)-1]
         subplot_idxs = [2,4,6]
         for param_idx, subplot_idx in zip(param_idxs, subplot_idxs):
+            
             plt.subplot(3,2,subplot_idx)
-            plt.title(f'Wavefunction density at {self.param_label}={round(self.param_space[param_idx],1)}')
+            plt.title(f'State density at {self.param_label}={round(self.param_space[param_idx],1)}')
             plt.xlabel('Atomic site number')
             for i, state_densities in enumerate(self.plot_state_densities[param_idx]):
-                plt.plot(state_densities, label=f'{self.plot_band_idxs[i]}')
+                plt.plot(state_densities, alpha=0.5, label=f'{i}')
+            if subplot_idx in subplot_idxs[:-1]:
+                plt.gca().set_xticklabels([])
+                plt.gca().set_xlabel('')
         
         plt.suptitle(self.descr)
+        plt.legend(fontsize=8)
+        plt.gca().legend(loc='upper center', bbox_to_anchor=(1.2, 1.05))
         plt.tight_layout()
-        plt.legend()
         plt.show()
 
 
@@ -227,7 +236,7 @@ def construct_hamiltonian_kitaev(
         N, mu_onsite, t_nn, d_cooper,
         last_first_phase=0.5, apply_cooper_phase=False,
         antisymmetrize=False,
-        basis='electrons_holes',
+        basis='bogoliubov',
     ):
     '''
     N is number of atomic sites
@@ -236,49 +245,66 @@ def construct_hamiltonian_kitaev(
     boundary_hopping sets the strength of hopping t* between first and last site (closing the loop).
     The value of boundary_hopping is the x in t* = t_nn(1 - 2x) (knob to vary t* between -t_nn and t_nn)
     '''
-    if basis=='majoranas'
+    if basis=='majorana':
         ham_size = 2 * N
         H = np.zeros((ham_size,) * 2, dtype=np.complex128)
-        for i in range(0, ham_size-4, 2):
-            H[i+3] += 2. * 1j * (t_nn - d_cooper)
-            H[i+4] += 2. * 1j * (t_nn + d_cooper)
-        
+        for i in range(0, ham_size-3, 2):
+            H[i, i+1] += 2. * 1j * mu_onsite
+            H[i, i+3] += 2. * 1j * (d_cooper + t_nn)
+            H[i+1, i+2] += 2. * 1j * (d_cooper - t_nn)
+        H[-2, 1] += 2. * 1j * (d_cooper + t_nn) * np.cos(last_first_phase * np.pi )
+        H[-1, 0] += 2. * 1j * (d_cooper - t_nn) * np.cos(last_first_phase * np.pi )
+        H = 0.5 * (H - H.T)
+        return H
 
-    elif basis=='electrons_holes':
-
-        block_size = N
-
+    elif basis=='bogoliubov':
         # Get on-site energy contribution
         Hm = np.zeros((2*N,)*2, dtype=np.complex128)
-        for i in range(block_size):
+        for i in range(N):
             Hm[i,i] += -mu_onsite
             Hm[i+N, i+N] += mu_onsite
 
         # Get nn-hopping contribution
         Ht = np.zeros((2*N,)*2, dtype=np.complex128)
-        for i in range(block_size - 1):
+        for i in range(N - 1):
             Ht[i, i+1] += -t_nn
+            Ht[i+1, i] += -t_nn
             Ht[N+i, N+i+1] += t_nn
-        # Add last-to-first hopping with phase
-        Ht[N-1, 0] += -t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
-        Ht[2*N-1, N] += t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
-        Ht = Ht + np.transpose(np.conjugate(Ht))
+            Ht[N+i+1, N+i] += t_nn
+        # Add last-to-first hopping with phas
+        Ht[0, N-1] += t_nn * (2 * last_first_phase - 1) * t_nn #np.cos(last_first_phase * np.pi )
+        Ht[N-1, 0] += t_nn * (2 * last_first_phase - 1) * t_nn # np.cos(last_first_phase * np.pi )
+        Ht[N, -1] += -t_nn * (2 * last_first_phase - 1) * t_nn  # np.cos(last_first_phase * np.pi )
+        Ht[-1, N] += -t_nn * (2 * last_first_phase - 1) * t_nn # np.cos(last_first_phase * np.pi )
 
+        # Ht[0, -1] += -t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
+        # Ht[N-1, N] += t_nn 
+        # Ht[N-1, 0] += -t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
+        # Ht[2*N-1, N] += t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
+        # Ht = Ht + np.transpose(np.conjugate(Ht))
 
         # Get cooper-pairing contribution
         Hd = np.zeros((2*N,)*2, dtype=np.complex128)
-        for i in range(block_size -1):
-            Hd[i, N+i+1] += -d_cooper
-            Hd[N+i, i+1] += d_cooper
+        for i in range(N -1):
+            Hd[i, N+i+1] += d_cooper
+            Hd[i+1, N+i] += -d_cooper
+            Hd[i+N, i+1] += -d_cooper
+            Hd[i+N+1, i] += d_cooper
+
         if apply_cooper_phase:
             # Allow Cooper pairing between last and first site of chain
-            Hd[N-1, N] += -d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
-            Hd[2*N-1, 0] += d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
-        Hd = Hd + np.transpose(np.conjugate(Hd))
+            Hd[N, N] += d_cooper * (2 * last_first_phase - 1) * t_nn # np.real(cmath.exp(1j * last_first_phase * np.pi ))
+            Hd[-1, 0] += -d_cooper * (2 * last_first_phase - 1) * t_nn # np.real(cmath.exp(1j * last_first_phase * np.pi ))
+            Hd[0, -1] += -d_cooper * (2 * last_first_phase - 1) * t_nn  # np.real(cmath.exp(1j * last_first_phase * np.pi ))
+            Hd[N-1, N] += d_cooper * (2 * last_first_phase - 1) * t_nn  #np.real(cmath.exp(1j * last_first_phase * np.pi ))
+            # Hd[N-1, N] += -d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
+            # Hd[2*N-1, 0] += d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
+            pass
+        # Hd = Hd + np.transpose(np.conjugate(Hd))
 
         H = Hm + Ht + Hd
 
-        if not antisymmetrize:
+        if antisymmetrize:
             return antisymmetrize_H(H)
         else:
             return H
