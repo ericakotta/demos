@@ -7,7 +7,6 @@ an on-site energy, nearest-neighbor hopping, and Cooper pairing.
 '''
 import argparse
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
 import sys
 from typing import Literal
@@ -60,11 +59,18 @@ def parse_args(args):
         '--enforce-even-sites', action='store_true', default=False,
         help="In SSH model enforce an even number of C-atom sites (odd number of hopping terms).",
     )
+    # parser.add_argument(
+    #     '--plot-bands', default=True,
+    #     help="Plot the energy bands and spatial distribution of some eigenstates."
+    # )
     parser.add_argument(
         '--plot-band-idxs', type=int, nargs='+', default=[0, 1], 
         help="Enter idx of the energy modes (0=lowest-energy, etc) to see spatial distribution of"
     )
-
+    parser.add_argument(
+        '--show-ham', action='store_true', default=False,
+        help="Show heatmap of BdG Hamiltonian at the firs parameter value as sanity check.",
+    )
     return parser.parse_args(args)
 
 
@@ -92,6 +98,7 @@ class H_BdG_constructor():
         self.plot_band_idxs = kwargs.get('plot_band_idxs', [0,1])
         self.basis = kwargs.get('basis', 'single-particle')
 
+        self.show_ham = kwargs.get('show_ham', False)
 
         if self.model.lower() == 'kitaev':
             # Kitaev model is 1d chain of superconducing qubits characterized by parameters t, m, d
@@ -151,7 +158,7 @@ class H_BdG_constructor():
             elif self.ROUTINE == 1:
                 H_BdG = construct_hamiltonian_kitaev(
                     self.N_sites, self.m, self.t, self.d, 
-                    last_first_phase=1.*param,
+                    x_close_chain=1.*param,
                 )
             elif self.ROUTINE == 2:
                 H_BdG = construct_hamiltonian_ssh(
@@ -171,7 +178,7 @@ class H_BdG_constructor():
             self.energy_bands.append(sorted(energies))
             self.plot_state_densities.append(plot_state_densities)
             
-            if param == self.param_space[0]:
+            if self.show_ham and param == self.param_space[0]:
                 _, axs = plt.subplots(1,2, figsize=(10,4))
                 sns.heatmap(ax=axs[0], data=np.real(H_BdG), annot=True, square=True)
                 axs[0].set_title('real')
@@ -203,8 +210,23 @@ class H_BdG_constructor():
 
         return evals, plot_state_densities
 
-    def plot_figures(self):
+    def plot_figures(self, param_list=None):
         # Plot the energy spectrum across parameter space
+        if param_list is None:
+            param_idxs = [0, int(len(self.param_space)/2), len(self.param_space)-1]
+            subplot_idxs = [2,4,6]
+        else:
+            param_idxs = []
+            subplot_idxs = []
+            for idx, param in enumerate(param_list):
+                ds = np.abs(np.array(self.param_space) - param)
+                param_idx = np.where(ds == min(ds))[0][0]
+                param_idxs.append(param_idx)
+                subplot_idxs.append(idx*2 + 2)
+            print("param idxs:",param_idxs)
+            print("subplot idxs:",subplot_idxs)
+
+        fig, axs = plt.subplots(3,2)#plt.subplots(3,2)
         plt.subplot(121)
         plt.title('Energies (arb. units)')
         plt.xlabel(self.param_label)
@@ -212,31 +234,28 @@ class H_BdG_constructor():
             plt.plot(self.param_space, [x[i] for x in self.energy_bands], 'k')
 
         # Plot wavefunction densities (across sites) at a few parameter values
-        param_idxs = [0, int(len(self.param_space)/2), len(self.param_space)-1]
-        subplot_idxs = [2,4,6]
         for param_idx, subplot_idx in zip(param_idxs, subplot_idxs):
             
-            plt.subplot(3,2,subplot_idx)
-            plt.title(f'State density at {self.param_label}={round(self.param_space[param_idx],1)}')
+            plt.subplot(len(param_idxs),2,subplot_idx)#plt.subplot(3,2,subplot_idx)
+            plt.title(f'State density at {self.param_label}={round(self.param_space[param_idx],1)}', fontsize=8)
             plt.xlabel('Atomic site number')
             for i, state_densities in enumerate(self.plot_state_densities[param_idx]):
-                plt.plot(state_densities, alpha=0.5, label=f'{i}')
+                plt.plot(state_densities, marker=f'${i}$', alpha=0.5, label=f'{i}')
             if subplot_idx in subplot_idxs[:-1]:
                 plt.gca().set_xticklabels([])
                 plt.gca().set_xlabel('')
-        
+            if subplot_idx == subplot_idxs[0]:
+                pass
+                plt.legend(fontsize=8)
+                plt.gca().legend(loc='upper center', bbox_to_anchor=(1.2, 1.05), ncol=1, fontsize=8)    
+
         plt.suptitle(self.descr)
-        plt.legend(fontsize=8)
-        plt.gca().legend(loc='upper center', bbox_to_anchor=(1.2, 1.05))
         plt.tight_layout()
         plt.show()
 
 
 def construct_hamiltonian_kitaev(
-        N, mu_onsite, t_nn, d_cooper,
-        last_first_phase=0.5, apply_cooper_phase=True,
-        antisymmetrize=False,
-        basis='bogoliubov',
+        N, mu_onsite, t_nn, d_cooper, x_close_chain=0.5,
     ):
     '''
     N is number of atomic sites
@@ -245,69 +264,42 @@ def construct_hamiltonian_kitaev(
     boundary_hopping sets the strength of hopping t* between first and last site (closing the loop).
     The value of boundary_hopping is the x in t* = t_nn(1 - 2x) (knob to vary t* between -t_nn and t_nn)
     '''
-    if basis=='majorana':
-        ham_size = 2 * N
-        H = np.zeros((ham_size,) * 2, dtype=np.complex128)
-        for i in range(0, ham_size-3, 2):
-            H[i, i+1] += 2. * 1j * mu_onsite
-            H[i, i+3] += 2. * 1j * (d_cooper + t_nn)
-            H[i+1, i+2] += 2. * 1j * (d_cooper - t_nn)
-        H[-2, 1] += 2. * 1j * (d_cooper + t_nn) * np.cos(last_first_phase * np.pi )
-        H[-1, 0] += 2. * 1j * (d_cooper - t_nn) * np.cos(last_first_phase * np.pi )
-        H = 0.5 * (H - H.T)
-        return H
+    # Get on-site energy contribution
+    Hm = np.zeros((2*N,)*2, dtype=np.complex128)
+    for i in range(N):
+        Hm[i,i] += -mu_onsite
+        Hm[i+N, i+N] += mu_onsite
 
-    elif basis=='bogoliubov':
-        # Get on-site energy contribution
-        Hm = np.zeros((2*N,)*2, dtype=np.complex128)
-        for i in range(N):
-            Hm[i,i] += -mu_onsite
-            Hm[i+N, i+N] += mu_onsite
+    # Get nn-hopping contribution
+    Ht = np.zeros((2*N,)*2, dtype=np.complex128)
+    for i in range(N - 1):
+        Ht[i, i+1] += -t_nn
+        Ht[i+1, i] += -t_nn
+        Ht[N+i, N+i+1] += t_nn
+        Ht[N+i+1, N+i] += t_nn
 
-        # Get nn-hopping contribution
-        Ht = np.zeros((2*N,)*2, dtype=np.complex128)
-        for i in range(N - 1):
-            Ht[i, i+1] += -t_nn
-            Ht[i+1, i] += -t_nn
-            Ht[N+i, N+i+1] += t_nn
-            Ht[N+i+1, N+i] += t_nn
-        # Add last-to-first hopping with phas
-        Ht[0, N-1] += t_nn * (2 * last_first_phase - 1)  #np.cos(last_first_phase * np.pi )
-        Ht[N-1, 0] += t_nn * (2 * last_first_phase - 1)  # np.cos(last_first_phase * np.pi )
-        Ht[N, -1] += -t_nn * (2 * last_first_phase - 1)   # np.cos(last_first_phase * np.pi )
-        Ht[-1, N] += -t_nn * (2 * last_first_phase - 1)  # np.cos(last_first_phase * np.pi )
+    # Get cooper-pairing contribution
+    Hd = np.zeros((2*N,)*2, dtype=np.complex128)
+    for i in range(N -1):
+        Hd[i, N+i+1] += d_cooper
+        Hd[i+1, N+i] += -d_cooper
+        Hd[i+N, i+1] += -d_cooper
+        Hd[i+N+1, i] += d_cooper
 
-        # Ht[0, -1] += -t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
-        # Ht[N-1, N] += t_nn 
-        # Ht[N-1, 0] += -t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
-        # Ht[2*N-1, N] += t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
-        # Ht = Ht + np.transpose(np.conjugate(Ht))
+    if x_close_chain is not None:
+        # Add hopping between last and first site
+        phase = np.cos(x_close_chain * np.pi )
+        Ht[0, N-1] += t_nn * phase
+        Ht[N-1, 0] += t_nn * phase 
+        Ht[N, -1] += -t_nn * phase
+        Ht[-1, N] += -t_nn * phase
+        # Allow Cooper pairing between last and first site of chain
+        Hd[N, N-1] += -d_cooper * phase# (2 * x_close_chain - 1)
+        Hd[-1, 0] += d_cooper * phase# (2 * x_close_chain - 1)
+        Hd[0, -1] += d_cooper * phase#(2 * x_close_chain - 1)
+        Hd[N-1, N] += -d_cooper * phase#(2 * x_close_chain - 1)  
 
-        # Get cooper-pairing contribution
-        Hd = np.zeros((2*N,)*2, dtype=np.complex128)
-        for i in range(N -1):
-            Hd[i, N+i+1] += d_cooper
-            Hd[i+1, N+i] += -d_cooper
-            Hd[i+N, i+1] += -d_cooper
-            Hd[i+N+1, i] += d_cooper
-
-        if apply_cooper_phase:
-            # Allow Cooper pairing between last and first site of chain
-            Hd[N, N-1] += -d_cooper * (2 * last_first_phase - 1)  # np.real(cmath.exp(1j * last_first_phase * np.pi ))
-            Hd[-1, 0] += d_cooper * (2 * last_first_phase - 1)  # np.real(cmath.exp(1j * last_first_phase * np.pi ))
-            Hd[0, -1] += d_cooper * (2 * last_first_phase - 1)   # np.real(cmath.exp(1j * last_first_phase * np.pi ))
-            Hd[N-1, N] += -d_cooper * (2 * last_first_phase - 1)  #np.real(cmath.exp(1j * last_first_phase * np.pi ))
-            # Hd[N-1, N] += -d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
-            # Hd[2*N-1, 0] += d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
-            pass
-        # Hd = Hd + np.transpose(np.conjugate(Hd))
-
-        H = Hm + Ht + Hd
-
-        if antisymmetrize:
-            return antisymmetrize_H(H)
-        else:
-            return H
+    return Hm + Ht + Hd
 
     
 
@@ -419,8 +411,6 @@ if __name__ == '__main__':
 
     N = args.N # Number of unit cells
     param_label = args.tune # Parameter to tune
-    plot_band_idx = args.plot_band_idxs # Idx of energy modes to see spatial distribution
-    # param_slices = args.param_values # Parameter values at which to plot spatial distribution
 
     if param_label == 'x':
         param_space = np.linspace(0., 1., 41)
@@ -461,6 +451,7 @@ if __name__ == '__main__':
         model_params,
         enforce_even_sites=args.enforce_even_sites,
         plot_band_idxs=args.plot_band_idxs,
+        show_ham=args.show_ham,
     )
     H_constructor.construct_and_solve_hamiltonians()
     H_constructor.plot_figures()
