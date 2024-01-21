@@ -234,7 +234,7 @@ class H_BdG_constructor():
 
 def construct_hamiltonian_kitaev(
         N, mu_onsite, t_nn, d_cooper,
-        last_first_phase=0.5, apply_cooper_phase=False,
+        last_first_phase=0.5, apply_cooper_phase=True,
         antisymmetrize=False,
         basis='bogoliubov',
     ):
@@ -272,10 +272,10 @@ def construct_hamiltonian_kitaev(
             Ht[N+i, N+i+1] += t_nn
             Ht[N+i+1, N+i] += t_nn
         # Add last-to-first hopping with phas
-        Ht[0, N-1] += t_nn * (2 * last_first_phase - 1) * t_nn #np.cos(last_first_phase * np.pi )
-        Ht[N-1, 0] += t_nn * (2 * last_first_phase - 1) * t_nn # np.cos(last_first_phase * np.pi )
-        Ht[N, -1] += -t_nn * (2 * last_first_phase - 1) * t_nn  # np.cos(last_first_phase * np.pi )
-        Ht[-1, N] += -t_nn * (2 * last_first_phase - 1) * t_nn # np.cos(last_first_phase * np.pi )
+        Ht[0, N-1] += t_nn * (2 * last_first_phase - 1)  #np.cos(last_first_phase * np.pi )
+        Ht[N-1, 0] += t_nn * (2 * last_first_phase - 1)  # np.cos(last_first_phase * np.pi )
+        Ht[N, -1] += -t_nn * (2 * last_first_phase - 1)   # np.cos(last_first_phase * np.pi )
+        Ht[-1, N] += -t_nn * (2 * last_first_phase - 1)  # np.cos(last_first_phase * np.pi )
 
         # Ht[0, -1] += -t_nn * np.real(cmath.exp(1j * last_first_phase * np.pi ))
         # Ht[N-1, N] += t_nn 
@@ -293,10 +293,10 @@ def construct_hamiltonian_kitaev(
 
         if apply_cooper_phase:
             # Allow Cooper pairing between last and first site of chain
-            Hd[N, N] += d_cooper * (2 * last_first_phase - 1) * t_nn # np.real(cmath.exp(1j * last_first_phase * np.pi ))
-            Hd[-1, 0] += -d_cooper * (2 * last_first_phase - 1) * t_nn # np.real(cmath.exp(1j * last_first_phase * np.pi ))
-            Hd[0, -1] += -d_cooper * (2 * last_first_phase - 1) * t_nn  # np.real(cmath.exp(1j * last_first_phase * np.pi ))
-            Hd[N-1, N] += d_cooper * (2 * last_first_phase - 1) * t_nn  #np.real(cmath.exp(1j * last_first_phase * np.pi ))
+            Hd[N, N-1] += -d_cooper * (2 * last_first_phase - 1)  # np.real(cmath.exp(1j * last_first_phase * np.pi ))
+            Hd[-1, 0] += d_cooper * (2 * last_first_phase - 1)  # np.real(cmath.exp(1j * last_first_phase * np.pi ))
+            Hd[0, -1] += d_cooper * (2 * last_first_phase - 1)   # np.real(cmath.exp(1j * last_first_phase * np.pi ))
+            Hd[N-1, N] += -d_cooper * (2 * last_first_phase - 1)  #np.real(cmath.exp(1j * last_first_phase * np.pi ))
             # Hd[N-1, N] += -d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
             # Hd[2*N-1, 0] += d_cooper * np.real(np.exp(1j * last_first_phase * np.pi / 180))
             pass
