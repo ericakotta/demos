@@ -180,9 +180,9 @@ class H_BdG_constructor():
             
             if self.show_ham and param == self.param_space[0]:
                 _, axs = plt.subplots(1,2, figsize=(10,4))
-                sns.heatmap(ax=axs[0], data=np.real(H_BdG), annot=True, square=True)
+                sns.heatmap(ax=axs[0], data=np.real(H_BdG), annot=False, square=True)
                 axs[0].set_title('real')
-                sns.heatmap(ax=axs[1], data=np.imag(H_BdG), annot=True, square=True)
+                sns.heatmap(ax=axs[1], data=np.imag(H_BdG), annot=False, square=True)
                 axs[1].set_title('imag')
                 plt.suptitle(f'H_BdG @ {self.param_label}={param}')
                 plt.show()
@@ -210,47 +210,46 @@ class H_BdG_constructor():
 
         return evals, plot_state_densities
 
-    def plot_figures(self, param_list=None):
+    def plot_figures(self, param_values=None, figsize=(10,7)):
         # Plot the energy spectrum across parameter space
-        if param_list is None:
+        if param_values is None:
             param_idxs = [0, int(len(self.param_space)/2), len(self.param_space)-1]
             subplot_idxs = [2,4,6]
         else:
             param_idxs = []
             subplot_idxs = []
-            for idx, param in enumerate(param_list):
+            for idx, param in enumerate(param_values):
                 ds = np.abs(np.array(self.param_space) - param)
                 param_idx = np.where(ds == min(ds))[0][0]
                 param_idxs.append(param_idx)
                 subplot_idxs.append(idx*2 + 2)
-            print("param idxs:",param_idxs)
-            print("subplot idxs:",subplot_idxs)
 
-        fig, axs = plt.subplots(3,2)#plt.subplots(3,2)
+        fig, axs = plt.subplots(3,2, figsize=figsize)
+        plt.clf()
         plt.subplot(121)
         plt.title('Energies (arb. units)')
         plt.xlabel(self.param_label)
         for i in range(len(self.energy_bands[0])):
-            plt.plot(self.param_space, [x[i] for x in self.energy_bands], 'k')
+            plt.plot(self.param_space, [np.real(x[i]) for x in self.energy_bands], 'k')
 
         # Plot wavefunction densities (across sites) at a few parameter values
+        N = len(self.plot_state_densities[0])
+        plt.rcParams["axes.prop_cycle"] = plt.cycler("color", plt.cm.cividis(np.linspace(0,1,N)))
+        markers = ['v','^']
         for param_idx, subplot_idx in zip(param_idxs, subplot_idxs):
             
             plt.subplot(len(param_idxs),2,subplot_idx)#plt.subplot(3,2,subplot_idx)
-            plt.title(f'State density at {self.param_label}={round(self.param_space[param_idx],1)}', fontsize=8)
+            plt.title(f'State density at {self.param_label}={round(self.param_space[param_idx],3)}', fontsize=8)
             plt.xlabel('Atomic site number')
-            for i, state_densities in enumerate(self.plot_state_densities[param_idx]):
+            state_densities = self.plot_state_densities[param_idx]
+            for i, state_densities in enumerate(state_densities):
                 plt.plot(state_densities, marker=f'${i}$', alpha=0.5, label=f'{i}')
             if subplot_idx in subplot_idxs[:-1]:
                 plt.gca().set_xticklabels([])
                 plt.gca().set_xlabel('')
             if subplot_idx == subplot_idxs[0]:
-                pass
-                plt.legend(fontsize=8)
-                plt.gca().legend(loc='upper center', bbox_to_anchor=(1.2, 1.05), ncol=1, fontsize=8)    
-
+                plt.gca().legend(title='State idx', fontsize=7, bbox_to_anchor=(1.02, 1), loc=0, borderaxespad=0)
         plt.suptitle(self.descr)
-        plt.tight_layout()
         plt.show()
 
 
@@ -301,63 +300,11 @@ def construct_hamiltonian_kitaev(
 
     return Hm + Ht + Hd
 
-    
-
-
-def construct_hamiltonian_kitaev_arx(N, mu_onsite, t_nn, d_cooper, last_first_hop=None):
-    '''
-    N is number of atomic sites
-    mu_onsite is onsite energy, t_nn is nearest-neighbor hopping, d_cooper is Cooper pairing strength
-
-    boundary_hopping sets the strength of hopping t* between first and last site (closing the loop).
-    The value of boundary_hopping is the x in t* = t_nn(1 - 2x) (knob to vary t* between -t_nn and t_nn)
-    '''
-    block_size = (N,)*2
-    # Create the H block of H_BdG
-    H_block = np.zeros(block_size, dtype=np.cdouble)
-    # Add on-site and nn-hopping terms
-    for i in range(H_block.shape[0] - 1):
-        H_block[i,i] += mu_onsite
-        H_block[i, i+1] += t_nn.conjugate()
-        H_block[i+1, i] += t_nn
-    H_block[-1,-1] += mu_onsite
-
-    if last_first_hop is not None:
-        # Add close-loop hopping from first and last site
-        H_block[-1, 0] += t_nn * np.real(cmath.exp(1j * last_first_hop * np.pi ))
-        H_block[0, -1] += t_nn *np.real(cmath.exp(1j * last_first_hop * np.pi )).conjugate()
-
-
-    # Create the (upper-right) D-block of H_BdG
-    D_block = np.zeros(block_size, dtype=np.cdouble)
-    # Add the Cooper-pairing terms
-    for i in range(D_block.shape[0] - 1):
-        D_block[i, i+1] += -d_cooper.conjugate()
-        D_block[i+1, i] += d_cooper.conjugate()
-
-    # Create final H_BdG by stitching together the H- and D-blocks with their negative conjugates
-    H_top = np.hstack((H_block, D_block))
-    H_bottom = np.hstack((-D_block.conjugate(), -H_block.conjugate()))
-    H_BdG = np.vstack((H_top, H_bottom))
-    
-    return H_BdG
-
-def antisymmetrize_H(H_BdG):
-    sz = int(H_BdG.shape[0] / 2)
-    H = H_BdG[:sz, :sz]
-    D = H_BdG[:sz, sz:]
-    H_out = np.zeros(H_BdG.shape, dtype=np.cdouble)
-    H_out[:sz, :sz] = H - H.conjugate() + D - D.conjugate()
-    H_out[:sz, sz:] = 1j * (-H - H.conjugate() + D + D.conjugate())
-    H_out[sz:, :sz] = 1j * (H + H.conjugate() + D + D.conjugate())
-    H_out[sz:, sz:] = H - H.conjugate() - D + D.conjugate()
-    return H_out
 
 def construct_hamiltonian_ssh(
         N, t1, t2, 
         close_loop_hopping=None,
         even_sites=False,
-        antisymmetrize=False
     ):
     '''
     Construct Bogoliubov-de Gennes Hamiltonian for SSH model (polyacetylene chain)
