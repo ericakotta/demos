@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import sys
 from typing import Literal
 import seaborn as sns
-import cmath
 
 '''hello'''
 
@@ -59,10 +58,6 @@ def parse_args(args):
         '--enforce-even-sites', action='store_true', default=False,
         help="In SSH model enforce an even number of C-atom sites (odd number of hopping terms).",
     )
-    # parser.add_argument(
-    #     '--plot-bands', default=True,
-    #     help="Plot the energy bands and spatial distribution of some eigenstates."
-    # )
     parser.add_argument(
         '--plot-band-idxs', type=int, nargs='+', default=[0, 1], 
         help="Enter idx of the energy modes (0=lowest-energy, etc) to see spatial distribution of"
@@ -96,25 +91,24 @@ class H_BdG_constructor():
         self.param_space = model_params.get('parameter_space', np.linspace(0, 1, 51))
         self.N_sites = model_params.get('N_sites', 5)
         self.plot_band_idxs = kwargs.get('plot_band_idxs', [0,1])
-        self.basis = kwargs.get('basis', 'single-particle')
-
         self.show_ham = kwargs.get('show_ham', False)
 
         if self.model.lower() == 'kitaev':
             # Kitaev model is 1d chain of superconducing qubits characterized by parameters t, m, d
             # that specify nn-hopping strength, on-site energy, cooper pairing strength, respectively
-            self.t = model_params.get('nn_hopping', 1.0)
-            self.m = model_params.get('onsite_energy', 1.0)
-            self.d = model_params.get('cooper_pairing', 1.0)
+            self.t = model_params.get('t_hopping', 1.0)
+            self.m = model_params.get('m_onsite', 1.0)
+            self.d = model_params.get('d_cooper', 1.0)
+            self.x = model_params.get('x_periodic', 0.5)
 
             self.descr = f"Kitaev t: {self.t}, d: {self.d}"
-            if 'mu' not in self.param_label:
-                self.descr += f", mu: {self.m}"
-            
-            if model_params['tuning_parameter'] == 'x':
+            if self.param_label.lower() == 'x':
+                self.descr += f", m: {self.m}"
                 self.ROUTINE = 1
                 print(f"Constructing BdG Hamiltoninan for Kitaev chain tuning N-to-1 hopping...")
+
             else:
+                self.descr += f", x: {self.x}"
                 self.ROUTINE = 0
                 print(f"Constructing BdG Hamiltonian for Kitaev chain tuning on-site energy...")
 
@@ -153,16 +147,15 @@ class H_BdG_constructor():
             if self.ROUTINE == 0:
                 # Open-loop Kitaev chain, tune mu/t
                 H_BdG = construct_hamiltonian_kitaev(
-                    self.N_sites, param*self.t, self.t, self.d,
+                    self.N_sites, param*self.t, self.t, self.d, x_periodic=self.x,
                 )
             elif self.ROUTINE == 1:
                 H_BdG = construct_hamiltonian_kitaev(
-                    self.N_sites, self.m, self.t, self.d, 
-                    x_close_chain=1.*param,
+                    self.N_sites, self.m, self.t, self.d, x_periodic=1.*param,
                 )
             elif self.ROUTINE == 2:
                 H_BdG = construct_hamiltonian_ssh(
-                    N, self.t1, param*self.t1,
+                    self.N_sites, self.t1, param*self.t1,
                     close_loop_hopping=None,
                     even_sites=self.enforce_even_sites,
                 )
@@ -234,7 +227,7 @@ class H_BdG_constructor():
 
         # Plot wavefunction densities (across sites) at a few parameter values
         N = len(self.plot_state_densities[0])
-        plt.rcParams["axes.prop_cycle"] = plt.cycler("color", plt.cm.cividis(np.linspace(0,1,N)))
+        plt.rcParams["axes.prop_cycle"] = plt.cycler("color", plt.cm.turbo(np.linspace(0,1,N)))
         markers = ['v','^']
         for param_idx, subplot_idx in zip(param_idxs, subplot_idxs):
             
@@ -254,7 +247,7 @@ class H_BdG_constructor():
 
 
 def construct_hamiltonian_kitaev(
-        N, mu_onsite, t_nn, d_cooper, x_close_chain=0.5,
+        N, mu_onsite, t_nn, d_cooper, x_periodic=0.5,
     ):
     '''
     N is number of atomic sites
@@ -285,18 +278,18 @@ def construct_hamiltonian_kitaev(
         Hd[i+N, i+1] += -d_cooper
         Hd[i+N+1, i] += d_cooper
 
-    if x_close_chain is not None:
+    if x_periodic is not None:
         # Add hopping between last and first site
-        phase = np.cos(x_close_chain * np.pi )
+        phase = 1 - 2 * x_periodic#np.cos(x_periodic * np.pi )
         Ht[0, N-1] += t_nn * phase
         Ht[N-1, 0] += t_nn * phase 
         Ht[N, -1] += -t_nn * phase
         Ht[-1, N] += -t_nn * phase
         # Allow Cooper pairing between last and first site of chain
-        Hd[N, N-1] += -d_cooper * phase# (2 * x_close_chain - 1)
-        Hd[-1, 0] += d_cooper * phase# (2 * x_close_chain - 1)
-        Hd[0, -1] += d_cooper * phase#(2 * x_close_chain - 1)
-        Hd[N-1, N] += -d_cooper * phase#(2 * x_close_chain - 1)  
+        Hd[N, N-1] += -d_cooper * phase# (2 * x_periodic - 1)
+        Hd[-1, 0] += d_cooper * phase# (2 * x_periodic - 1)
+        Hd[0, -1] += d_cooper * phase#(2 * x_periodic - 1)
+        Hd[N-1, N] += -d_cooper * phase#(2 * x_periodic - 1)  
 
     return Hm + Ht + Hd
 
@@ -355,8 +348,6 @@ def parse_complex_arg(arg):
 if __name__ == '__main__':
 
     args = parse_args(sys.argv[1:])
-
-    N = args.N # Number of unit cells
     param_label = args.tune # Parameter to tune
 
     if param_label == 'x':
@@ -367,13 +358,14 @@ if __name__ == '__main__':
         # Set up parameter space to tune system through
         if param_label is None or param_label == 'mu/t':
             param_label = 'mu/t'
-            param_space = np.linspace(0.0, 3.0, 41)
+            param_space = np.linspace(0.01, 4.0, 101)
 
         model_params = {
-            'onsite_energy': parse_complex_arg(args.m), # Unused if tuning mu/t
-            'cooper_pairing': parse_complex_arg(args.d), # Cooper pairing strength
-            'nn_hopping': parse_complex_arg(args.t), # nearest-neighbor hopping
-            'N_sites': N,
+            'm_onsite': parse_complex_arg(args.m), # Unused if tuning mu/t
+            'd_cooper': parse_complex_arg(args.d), # Cooper pairing strength
+            't_hopping': parse_complex_arg(args.t), # nearest-neighbor hopping
+            'x_periodic': float(args.x), # last-to-first periodic hopping
+            'N_sites': args.N,
             'parameter_space': param_space,
             'tuning_parameter': param_label,
         }
@@ -382,12 +374,12 @@ if __name__ == '__main__':
         # Set up param space to tune system through
         if param_label is None:
             param_label = 't2/t1'
-            param_space = np.linspace(0, 1.0, 41)
+            param_space = np.linspace(0, 1.0, 101)
         
         model_params = {
             't1_hopping': 1.0 + 0.0j , # Reference strength for SSH single-bond hopping
             't2_hopping': parse_complex_arg(args.t2), # Not used if t2 is tuning parameter
-            'N_sites': 2 * N,
+            'N_sites': 2 * args.N,
             'parameter_space': param_space,
             'tuning_parameter': param_label,
         }
